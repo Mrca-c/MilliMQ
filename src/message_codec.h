@@ -12,17 +12,23 @@ namespace millimq
         uint8_t version;      // 格式版本,用于更新消息头
         uint32_t topic_id;    // 主题的唯一编号
         uint32_t payload_len; // 有效内容长
+        uint64_t seq_num;     // 消息序号
 
-        static constexpr size_t SIZE = 1 + 4 + 4; // 头部固定 9 字节
+        static constexpr size_t V0_SIZE = 1 + 4 + 4;
+        static constexpr size_t V1_SIZE = V0_SIZE + 8;
     };
 
     class MessageCodec
     {
     public:
         // 编码
-        static std::vector<char> encode(uint32_t topic_id,
-                                        const char *payload,
-                                        uint32_t payload_len);
+        static std::vector<char> encode_v0(uint32_t topic_id,
+                                           const char *payload,
+                                           uint32_t payload_len);
+        static std::vector<char> encode_v1(uint32_t topic_id,
+                                           uint64_t seq_num,
+                                           const char *payload,
+                                           uint32_t payload_len);
 
         // 解码
         static bool decode_header(const char *data, MessageHeader &header);
