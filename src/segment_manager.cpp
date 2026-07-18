@@ -1,12 +1,14 @@
 #include "segment_manager.h"
 #include <iostream>
 #include <stdexcept>
+#include <unistd.h>
+#include <cstring>
 
 namespace millimq
 {
 
-    SegmentManager::SegmentManager(const std::string &data_dir, uint64_t max_seg_size)
-        : dir_(data_dir), max_seg_size_(max_seg_size)
+    SegmentManager::SegmentManager(const std::string &data_dir, uint64_t max_seg_size, size_t max_open_files)
+        : dir_(data_dir), max_seg_size_(max_seg_size), read_pool_(data_dir, max_open_files)
     {
         active_segment_ = std::make_unique<SegmentFile>(next_seg_id_++);
         if (!active_segment_->open_for_write(dir_))
@@ -47,16 +49,15 @@ namespace millimq
         current_seg_size_ += len; // 更新当前文件已写的字节数
         return {seg_id, static_cast<uint64_t>(offset)};
     }
-
+    
     int64_t SegmentManager::read(uint32_t seg_id, uint64_t offset, char *buf, size_t max_len)
     {
-        // 临时翻开指定的旧文件，读完它会在函数结束时自动合上
-        SegmentFile seg(seg_id);
-        if (!seg.open_for_read(dir_))
-        {
+        // 1. 从句柄池获取该段文件的描述符
+        int fd = read_pool_.get_fd(seg_id);
+        if (fd < 0)
             return -1;
-        }
-        return seg.read_at(offset, buf, max_len);
+        // 2. 委托 SegmentFile 的静态方法完成实际读取（封装 I/O 细节）
+        return SegmentFile::read_from_fd(fd, offset, buf, max_len);
     }
 
 }
