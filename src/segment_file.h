@@ -19,6 +19,7 @@ namespace millimq
         int64_t read_at(uint64_t offset, char *buf, size_t max_len); // 返回读取字节数
         // 获得文件id，得知几号段文件
         uint32_t segment_id() const { return seg_id_; };
+        static int64_t read_from_fd(int fd, uint64_t offset, char* buf, size_t max_len);
 
     private:
         uint32_t seg_id_; // 段编号，用来确定操作文件

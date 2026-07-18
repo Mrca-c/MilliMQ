@@ -86,4 +86,25 @@ namespace millimq
         }
         return static_cast<int64_t>(n);
     }
+
+    int64_t SegmentFile::read_from_fd(int fd, uint64_t offset, char *buf, size_t max_len)
+    {
+        if (fd < 0)
+            return -1;
+
+        off_t ret = lseek(fd, static_cast<off_t>(offset), SEEK_SET);
+        if (ret < 0)
+        {
+            std::cerr << "lseek failed: " << strerror(errno) << std::endl;
+            return -1;
+        }
+
+        ssize_t n = read(fd, buf, max_len);
+        if (n < 0)
+        {
+            std::cerr << "read failed: " << strerror(errno) << std::endl;
+            return -1;
+        }
+        return static_cast<int64_t>(n);
+    }
 }
