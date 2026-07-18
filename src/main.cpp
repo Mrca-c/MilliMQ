@@ -1,66 +1,50 @@
-#include "segment_file.h"
+#include "segment_manager.h"
 #include "message_codec.h"
 #include <iostream>
-#include <sys/stat.h>
 #include <vector>
+#include <sys/stat.h>
 #include <cstring>
 
 int main()
 {
-    // 确保数据目录存在
     mkdir("./data", 0755);
 
-    // 打开第一个段文件
-    millimq::SegmentFile seg(1);
-    if (!seg.open_for_write("./data"))
+    millimq::SegmentManager sm("./data", 30);
+
+    auto write_msg = [&](const char *text, uint32_t topic_id)
     {
-        std::cerr << "Failed to open segment file" << std::endl;
-        return 1;
-    }
+        uint32_t len = strlen(text);
+        auto encoded = millimq::MessageCodec::encode(topic_id, text, len);
+        auto [seg_id, offset] = sm.append(encoded.data(), encoded.size());
+        std::cout << "写入消息到 segment " << seg_id << " 偏移 " << offset << std::endl;
+        return std::make_pair(seg_id, offset);
+    };
 
-    // 准备一条测试消息
-    uint32_t topic_id = 100;
-    const char *text = "Hello MilliMQ!";
-    uint32_t text_len = strlen(text);
+    auto pos1 = write_msg("Hello", 100);   // 这条消息编码后大约 14 字节
+    auto pos2 = write_msg("World", 101);   // 再写 14 字节，总共 28，空间还够
+    auto pos3 = write_msg("MilliMQ", 100); // 再写大概 16 字节，会超过 30，触发换新本
 
-    // 编码
-    auto encoded = millimq::MessageCodec::encode(topic_id, text, text_len);
-    std::cout << "Encoded size: " << encoded.size() << " bytes" << std::endl;
-
-    // 写入段文件
-    int64_t offset = seg.append(encoded.data(), encoded.size());
-    if (offset < 0)
+    // 读取并打印第一条和第三条消息验证
+    auto read_msg = [&](uint32_t seg_id, uint64_t offset)
     {
-        std::cerr << "Append failed" << std::endl;
-        return 1;
-    }
-    std::cout << "Written at offset " << offset << std::endl;
+        std::vector<char> buf(64);
+        int64_t n = sm.read(seg_id, offset, buf.data(), buf.size());
+        if (n > 0)
+        {
+            millimq::MessageHeader hdr;
+            millimq::MessageCodec::decode_header(buf.data(), hdr);
+            std::string payload(buf.data() + millimq::MessageHeader::SIZE, hdr.payload_len);
+            std::cout << "读出消息: topic=" << hdr.topic_id << " 内容=" << payload << std::endl;
+        }
+        else
+        {
+            std::cerr << "读取失败" << std::endl;
+        }
+    };
 
-    // 读回数据
-    std::vector<char> read_buf(encoded.size());
-    int64_t n = seg.read_at(offset, read_buf.data(), read_buf.size());
-    if (n < 0)
-    {
-        std::cerr << "Read failed" << std::endl;
-        return 1;
-    }
-
-    // 解码头部
-    millimq::MessageHeader hdr;
-    if (!millimq::MessageCodec::decode_header(read_buf.data(), hdr))
-    {
-        std::cerr << "Decode header failed" << std::endl;
-        return 1;
-    }
-
-    // 打印解析结果
-    std::cout << "Decoded: version=" << (int)hdr.version
-              << " topic=" << hdr.topic_id
-              << " payload_len=" << hdr.payload_len << std::endl;
-
-    // 提取有效载荷
-    std::string payload(read_buf.data() + millimq::MessageHeader::SIZE, hdr.payload_len);
-    std::cout << "Payload: " << payload << std::endl;
+    std::cout << "--- 读取验证 ---" << std::endl;
+    read_msg(pos1.first, pos1.second);
+    read_msg(pos3.first, pos3.second);
 
     return 0;
 }
