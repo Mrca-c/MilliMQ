@@ -4,4 +4,5 @@ add_executable(millimq
     segment_manager.cpp
     message_codec.cpp
     index_manager.cpp
+    file_handle_pool.cpp
 )
