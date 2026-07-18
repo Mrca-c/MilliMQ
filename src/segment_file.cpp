@@ -34,6 +34,18 @@ namespace millimq
         return true;
     }
 
+    bool SegmentFile::open_for_read(const std::string &directory)
+    {
+        std::string path = directory + "/segment_" + std::to_string(seg_id_) + ".log";
+        fd_ = open(path.c_str(), O_RDONLY); // 只读，不创建新文件
+        if (fd_ < 0)
+        {
+            std::cerr << "open for read failed: " << path << std::endl;
+            return false;
+        }
+        return true;
+    }
+
     int64_t SegmentFile::append(const char *data, size_t len)
     {
         if (fd_ < 0)
