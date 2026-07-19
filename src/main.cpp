@@ -6,6 +6,7 @@
 #include <chrono>
 #include <sys/stat.h>
 #include <thread>
+#include <cstring>
 
 int main()
 {
@@ -53,6 +54,35 @@ int main()
     }
     std::cout << "Random consume done, consumed " << consumed << " messages" << std::endl;
     std::cout << "Current pool size: " << sm.debug_pool_size() << std::endl;
+
+    const std::string group = "default";
+    uint32_t test_topic = 88888;
+
+    im.produce(test_topic, "offset_test_msg", 15);
+
+    uint64_t start_seq = im.get_offset(group, test_topic);
+    std::cout << "Initial offset for topic " << test_topic << ": " << start_seq << std::endl;
+
+    size_t msg_count = im.consume(test_topic, start_seq, 10,
+                                  [](uint32_t tid, uint64_t seq, const std::vector<char> &payload)
+                                  {
+                                      std::string msg(payload.begin(), payload.end());
+                                      std::cout << "  [Group default] Consumed: topic=" << tid << " seq=" << seq << " msg=" << msg << std::endl;
+                                  });
+
+    if (msg_count > 0)
+    {
+        uint64_t new_offset = start_seq + msg_count;
+        im.commit_offset(group, test_topic, new_offset);
+        std::cout << "Committed offset to " << new_offset << std::endl;
+    }
+
+    uint64_t recovered = im.get_offset(group, test_topic);
+    std::cout << "Recovered offset: " << recovered << " (expecting " << (start_seq + msg_count) << ")" << std::endl;
+
+    size_t again = im.consume(test_topic, recovered, 10,
+                              [](uint32_t, uint64_t, const std::vector<char> &) {});
+    std::cout << "Second consumption returned " << again << " messages (expected 0)" << std::endl;
 
     std::cout << "Program will exit in 10 seconds, observe file handles now." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(10));
