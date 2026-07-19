@@ -16,6 +16,7 @@ namespace millimq
         ~SegmentManager() = default;
         std::pair<uint32_t, uint64_t> append(const char *data, size_t len);
         int64_t read(uint32_t seg_id, uint64_t offset, char *buf, size_t max_len);
+        const std::string &get_directory() const { return dir_; }
         size_t debug_pool_size() const { return read_pool_.size(); } // 测试用查看打开文件数
 
     private:
