@@ -21,6 +21,7 @@ namespace millimq
 
     private:
         void roll_new_segment();                      // 打开新段文件
+        void scan_existing_segments();                // 启动时检测文件状态，避免文件无限增长
         std::string dir_;                             // 存放文件的文件夹
         uint64_t max_seg_size_;                       // 最大容量
         uint32_t next_seg_id_ = 1;                    // 下一文件编号
