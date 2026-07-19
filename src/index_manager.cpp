@@ -39,6 +39,7 @@ namespace millimq
             std::cerr << "produce failed: append error" << std::endl;
             return UINT64_MAX;
         }
+
         // 给positions添加最新MessagePos
         topic_index.positions.push_back({seg_id, static_cast<uint64_t>(offset), total_len});
         return seq_num;
@@ -158,12 +159,37 @@ namespace millimq
                 else
                     break;
                 uint32_t total_len = static_cast<uint32_t>(header_size + hdr.payload_len);
+                if (hdr.version == 2)
+                {
+                    total_len += 4;
+                }
+
                 auto &topic_index = topic_map_[hdr.topic_id];
                 topic_index.positions.push_back({seg_id, offset, total_len});
                 offset += total_len;
             }
         }
         std::cout << "rebuild: indexed " << topic_map_.size() << " topics from segments." << std::endl;
+    }
+
+    uint64_t IndexManager::get_offset(const std::string &consumer_group, uint32_t topic_id) const
+    {
+        auto group_it = consumer_offsets_.find(consumer_group);
+        if (group_it == consumer_offsets_.end())
+        {
+            return 0;
+        }
+        auto topic_it = group_it->second.find(topic_id);
+        if (topic_it == group_it->second.end())
+        {
+            return 0;
+        }
+        return topic_it->second;
+    }
+
+    void IndexManager::commit_offset(const std::string &consumer_group, uint32_t topic_id, uint64_t next_seq)
+    {
+        consumer_offsets_[consumer_group][topic_id] = next_seq;
     }
 
 }
