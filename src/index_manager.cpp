@@ -5,6 +5,18 @@
 #include <dirent.h>
 #include <set>
 #include <algorithm>
+#include <chrono>
+
+namespace
+{
+    uint64_t now_ms()
+    {
+        auto now = std::chrono::system_clock::now();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   now.time_since_epoch())
+            .count();
+    }
+}
 
 namespace millimq
 {
@@ -17,8 +29,8 @@ namespace millimq
         auto &topic_index = topic_map_[topic_id];
         // 获取已有序号
         uint64_t seq_num = topic_index.positions.size();
-
-        auto encoded = MessageCodec::encode_v1(topic_id, seq_num, payload, payload_len);
+        uint64_t timestamp = now_ms();
+        auto encoded = MessageCodec::encode_v2(topic_id, seq_num, timestamp, payload, payload_len);
         uint32_t total_len = static_cast<uint32_t>(encoded.size());
         // 委托写入段文件
         auto [seg_id, offset] = seg_mgr_.append(encoded.data(), total_len);
@@ -65,7 +77,20 @@ namespace millimq
                 std::cerr << "consume metadata mismatch" << std::endl;
                 break;
             }
-            size_t header_size = (hdr.version == 0) ? MessageHeader::V0_SIZE : MessageHeader::V1_SIZE;
+            size_t header_size = 0;
+            if (hdr.version == 0)
+                header_size = MessageHeader::V0_SIZE;
+            else if (hdr.version == 1)
+                header_size = MessageHeader::V1_SIZE;
+            else if (hdr.version == 2)
+                header_size = MessageHeader::V2_SIZE;
+            else
+                break;
+            if (!MessageCodec::verify_crc(buf.data(), pos.total_len))
+            {
+                std::cerr << "consume: CRC mismatch ..." << std::endl;
+                break;
+            }
             std::vector<char> payload(buf.begin() + header_size, buf.begin() + header_size + hdr.payload_len);
             cb(topic_id, i, payload);
             ++count;
@@ -109,7 +134,7 @@ namespace millimq
                 continue;
             }
             uint64_t offset = 0;
-            char head_buf[MessageHeader::V1_SIZE];
+            char head_buf[MessageHeader::V2_SIZE];
             while (true)
             {
                 int64_t n = file.read_at(offset, head_buf, sizeof(head_buf));
@@ -123,7 +148,15 @@ namespace millimq
                     std::cerr << "rebuild: decode header failed at seg " << seg_id << " offset " << offset << std::endl;
                     break;
                 }
-                size_t header_size = (hdr.version == 0) ? MessageHeader::V0_SIZE : MessageHeader::V1_SIZE;
+                size_t header_size = 0;
+                if (hdr.version == 0)
+                    header_size = MessageHeader::V0_SIZE;
+                else if (hdr.version == 1)
+                    header_size = MessageHeader::V1_SIZE;
+                else if (hdr.version == 2)
+                    header_size = MessageHeader::V2_SIZE;
+                else
+                    break;
                 uint32_t total_len = static_cast<uint32_t>(header_size + hdr.payload_len);
                 auto &topic_index = topic_map_[hdr.topic_id];
                 topic_index.positions.push_back({seg_id, offset, total_len});
