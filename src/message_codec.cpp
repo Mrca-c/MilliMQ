@@ -66,6 +66,7 @@ namespace millimq
         std::vector<char> buffer(total_len, 0);
         char *ptr = buffer.data();
         uint8_t version = 1;
+
         memcpy(ptr, &version, 1);
         ptr += 1;
         memcpy(ptr, &topic_id, 4);
@@ -75,6 +76,7 @@ namespace millimq
         memcpy(ptr, &seq_num, 8);
         ptr += 8;
         memcpy(ptr, payload, payload_len);
+
         return buffer;
     }
     std::vector<char> MessageCodec::encode_v2(uint32_t topic_id,
@@ -83,10 +85,12 @@ namespace millimq
                                               const char *payload,
                                               uint32_t payload_len)
     {
-        size_t total_len = MessageHeader::V2_SIZE + payload_len;
+        const size_t header_size = MessageHeader::V2_SIZE;
+        size_t total_len = MessageHeader::V2_SIZE + payload_len + 4; // 将crc隔离出来添加到正文中
         std::vector<char> buffer(total_len, 0);
         char *ptr = buffer.data();
         uint8_t version = 2;
+
         memcpy(ptr, &version, 1);
         ptr += 1;
         memcpy(ptr, &topic_id, 4);
@@ -97,12 +101,10 @@ namespace millimq
         ptr += 8;
         memcpy(ptr, &timestamp, 8);
         ptr += 8;
-        uint32_t crc_placeholder = 0;
-        memcpy(ptr, &crc_placeholder, 4);
-        ptr += 4;
+
         memcpy(ptr, payload, payload_len);
-        uint32_t crc = compute_crc32(buffer.data(), total_len - 4);
-        memcpy(buffer.data() + total_len - 4, &crc, 4);
+        uint32_t crc = compute_crc32(buffer.data(), header_size + payload_len);
+        memcpy(buffer.data() + header_size + payload_len, &crc, 4);
         return buffer;
     }
 
@@ -144,7 +146,7 @@ namespace millimq
             ptr += 8;
             memcpy(&header.timestamp, ptr, 8);
             ptr += 8;
-            memcpy(&header.crc, ptr, 4);
+            header.crc = 0;
         }
         else
         {
@@ -155,14 +157,18 @@ namespace millimq
 
     bool MessageCodec::verify_crc(const char *data, size_t total_len)
     {
-        if (total_len < MessageHeader::V2_SIZE)
+        if (total_len < MessageHeader::V2_SIZE + 4)
             return false;
-        uint8_t version = 0;
-        memcpy(&version, data, 1);
-        if (version != 2)
+
+        MessageHeader hdr;
+        if (!decode_header(data, hdr))
+            return false;
+        if (hdr.version != 2)
             return true;
+
         uint32_t stored_crc;
         memcpy(&stored_crc, data + total_len - 4, 4);
+
         uint32_t computed = compute_crc32(data, total_len - 4);
         return stored_crc == computed;
     }

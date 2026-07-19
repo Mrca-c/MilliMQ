@@ -18,7 +18,7 @@ namespace millimq
 
         static constexpr size_t V0_SIZE = 1 + 4 + 4;
         static constexpr size_t V1_SIZE = V0_SIZE + 8;
-        static constexpr size_t V2_SIZE = V1_SIZE + 8 + 4;
+        static constexpr size_t V2_SIZE = V1_SIZE + 8;
     };
 
     class MessageCodec
