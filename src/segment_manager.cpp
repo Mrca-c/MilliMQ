@@ -4,9 +4,16 @@
 #include <unistd.h>
 #include <cstring>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 namespace millimq
 {
+    static uint64_t current_time_ms()
+    {
+        struct timeval tv;
+        gettimeofday(&tv, nullptr);
+        return tv.tv_sec * 1000ULL + tv.tv_usec / 1000;
+    }
 
     SegmentManager::SegmentManager(const std::string &data_dir, uint64_t max_seg_size, size_t max_open_files)
         : dir_(data_dir), max_seg_size_(max_seg_size), read_pool_(data_dir, max_open_files)
@@ -24,6 +31,7 @@ namespace millimq
         }
         current_seg_size_ = 0;
         std::cout << "切换到新文件编号 " << active_segment_->segment_id() << std::endl;
+        seg_meta_[active_segment_->segment_id()] = {current_time_ms()};
     }
 
     std::pair<uint32_t, uint64_t> SegmentManager::append(const char *data, size_t len)
@@ -69,6 +77,7 @@ namespace millimq
             {
                 max_id = id;
                 last_size = st.st_size;
+                seg_meta_[id] = {static_cast<uint64_t>(st.st_mtime) * 1000ULL};
             }
             else
             {
@@ -85,6 +94,7 @@ namespace millimq
             {
                 throw std::runtime_error("Failed to create initial segment");
             }
+            seg_meta_[active_segment_->segment_id()] = {current_time_ms()};
             return;
         }
 
@@ -102,6 +112,40 @@ namespace millimq
                 throw std::runtime_error("Failed to open existing segment for append");
             }
             current_seg_size_ = static_cast<uint64_t>(last_size);
+        }
+    }
+
+    void SegmentManager::cleanup_old_segments(uint64_t retain_ms)
+    {
+        uint64_t now = current_time_ms();
+        uint64_t expire_time = now - retain_ms; // 计算过期时间点
+        auto it = seg_meta_.begin();
+        while (it != seg_meta_.end())
+        {
+            uint32_t seg_id = it->first;
+            // 不能删除正在写入的活跃段
+            if (active_segment_ && seg_id == active_segment_->segment_id())
+            {
+                ++it;
+                continue;
+            }
+            if (it->second.create_time < expire_time)
+            {
+                // 1. 删除磁盘上的段文件
+                std::string path = dir_ + "/segment_" + std::to_string(seg_id) + ".log";
+                if (unlink(path.c_str()) == 0)
+                    std::cout << "Deleted old segment: " << path << std::endl;
+                else
+                    std::cerr << "Failed to delete segment: " << path << std::endl;
+                // 2. 从句柄池中移除
+                read_pool_.remove(seg_id);
+                // 3. 从映射中移除
+                it = seg_meta_.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
         }
     }
 
