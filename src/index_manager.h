@@ -32,8 +32,9 @@ namespace millimq
                        std::function<void(uint32_t topic_id, uint64_t seq_num, const std::vector<char> &payload)> cb);
 
     private:
+        void rebuild();
         SegmentManager &seg_mgr_;
-        std::unordered_map<uint32_t, TopicIndex> topic_map_;  //使用哈希表来存储百万topic的索引表
+        std::unordered_map<uint32_t, TopicIndex> topic_map_; // 使用哈希表来存储百万topic的索引表
     };
 
 }
