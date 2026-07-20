@@ -19,6 +19,7 @@ namespace millimq
         : dir_(data_dir), max_seg_size_(max_seg_size), read_pool_(data_dir, max_open_files)
     {
         scan_existing_segments();
+        last_cleanup_time_ = current_time_ms();
     }
 
     void SegmentManager::roll_new_segment()
@@ -51,6 +52,12 @@ namespace millimq
         }
 
         current_seg_size_ += len; // 更新当前文件已写的字节数
+        uint64_t now = current_time_ms();
+        if (now - last_cleanup_time_ > CLEANUP_INTERVAL_MS)
+        {
+            cleanup_old_segments(24ULL * 3600 * 1000);
+            last_cleanup_time_ = now;
+        }
         return {seg_id, static_cast<uint64_t>(offset)};
     }
 

@@ -37,5 +37,7 @@ namespace millimq
         std::unique_ptr<SegmentFile> active_segment_; // 当前文件
         FileHandlePool read_pool_;                    // 句柄池
         std::map<uint32_t, SegmentMeta> seg_meta_;    // 记录段时间信息
+        int64_t last_cleanup_time_ = 0;               // 上次自动清理的时间
+        static constexpr uint64_t CLEANUP_INTERVAL_MS = 10000;
     };
 }
