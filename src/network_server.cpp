@@ -1,4 +1,5 @@
 #include "network_server.h"
+#include "protocol.h"
 #include <iostream>
 #include <stdexcept>
 #include <sys/socket.h>
@@ -46,6 +47,14 @@ NetworkServer::NetworkServer(int port)
 
 NetworkServer::~NetworkServer()
 {
+    running_.store(false);
+    for (auto &kv : conns_)
+    {
+        int client_fd = kv.first;
+        epoll_ctl(epfd_, EPOLL_CTL_DEL, client_fd, nullptr);
+        close(client_fd);
+    }
+    conns_.clear();
     if (listen_fd_ >= 0)
         close(listen_fd_);
 
@@ -61,9 +70,35 @@ static bool set_nonblocking(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) != -1;
 }
 
+static bool try_send(int epfd, int fd, NetworkServer::Connection &conn)
+{
+    while (!conn.send_buf.empty())
+    {
+        ssize_t n = write(fd, conn.send_buf.data(), conn.send_buf.size());
+        if (n > 0)
+        {
+            conn.send_buf.erase(conn.send_buf.begin(), conn.send_buf.begin() + n);
+        }
+        else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            return false;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    conn.send_pending = false;
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = fd;
+    epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);
+    return true;
+}
+
 void NetworkServer::run()
 {
-    running_.store(true);  //原子操作
+    running_.store(true); // 原子操作
     std::vector<struct epoll_event> events(64);
 
     while (running_.load())
@@ -75,10 +110,10 @@ void NetworkServer::run()
                 continue;
             break;
         }
-
         for (int i = 0; i < n; ++i)
         {
             int fd = events[i].data.fd;
+            uint32_t ev_mask = events[i].events; // 判断事件
             if (fd == listen_fd_)
             {
                 while (true)
@@ -96,6 +131,7 @@ void NetworkServer::run()
                             break;
                         }
                     }
+                    conns_[client_fd] = Connection{}; // 添加连接
                     set_nonblocking(client_fd);
                     struct epoll_event ev;
                     ev.events = EPOLLIN;
@@ -103,22 +139,85 @@ void NetworkServer::run()
                     if (epoll_ctl(epfd_, EPOLL_CTL_ADD, client_fd, &ev) < 0)
                     {
                         std::cerr << "epoll_ctl add client failed" << std::endl;
+                        conns_.erase(client_fd);
                         close(client_fd);
                     }
                 }
             }
             else
             {
-                char buf[4096];
-                ssize_t n = read(fd, buf, sizeof(buf));
-                if (n > 0)
-                {
-                    write(fd, buf, n);
-                }
-                else
+                auto it = conns_.find(fd);
+                if (it == conns_.end())
                 {
                     epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
                     close(fd);
+                    continue;
+                }
+                Connection &conn = it->second;
+                if (ev_mask & EPOLLIN)
+                {
+                    char buf[4096];
+                    ssize_t rn = read(fd, buf, sizeof(buf));
+                    if (rn > 0)
+                    {
+                        conn.recv_buf.insert(conn.recv_buf.end(), buf, buf + rn);
+                    }
+                    else if (rn == 0)
+                    {
+                        epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
+                        close(fd);
+                        conns_.erase(it);
+                        continue;
+                    }
+                    else
+                    {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK)
+                        {
+                            epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
+                            close(fd);
+                            conns_.erase(it);
+                        }
+                        continue;
+                    }
+                    std::vector<char> payload;
+                    while (millimq::protocol::extract_frame(conn.recv_buf, payload))
+                    {
+                        std::vector<char> resp = millimq::protocol::make_frame(payload.data(), payload.size());
+                        conn.send_buf.insert(conn.send_buf.end(), resp.begin(), resp.end());
+                        conn.send_pending = true;
+                    }
+                    if (conn.send_pending)
+                    {
+                        bool sent = try_send(epfd_, fd, conn);
+                        if (!sent && conn.send_buf.empty())
+                        {
+                            epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
+                            close(fd);
+                            conns_.erase(it);
+                            continue;
+                        }
+                        if (conn.send_pending)
+                        {
+                            struct epoll_event ev;
+                            ev.events = EPOLLIN | EPOLLOUT;
+                            ev.data.fd = fd;
+                            epoll_ctl(epfd_, EPOLL_CTL_MOD, fd, &ev);
+                        }
+                    }
+                }
+                if (ev_mask & EPOLLOUT)
+                {
+                    if (conn.send_pending)
+                    {
+                        try_send(epfd_, fd, conn);
+                    }
+                }
+                if (ev_mask & (EPOLLERR | EPOLLHUP))
+                {
+                    epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
+                    close(fd);
+                    conns_.erase(it);
+                    continue;
                 }
             }
         }
