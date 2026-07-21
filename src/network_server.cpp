@@ -11,6 +11,14 @@
 
 namespace millimq
 {
+    static bool set_nonblocking(int fd)
+    {
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (flags == -1)
+            return false;
+        return fcntl(fd, F_SETFL, flags | O_NONBLOCK) != -1;
+    }
+
     NetworkServer::NetworkServer(int port, millimq::IndexManager &engine)
         : engine_(engine)
     {
@@ -30,6 +38,9 @@ namespace millimq
 
         if (listen(listen_fd_, 10) < 0)
             throw std::runtime_error("listen failed");
+
+        if (!set_nonblocking(listen_fd_))
+            throw std::runtime_error("set_nonblocking listen_fd failed");
 
         std::cout << "Server listening on port " << port << std::endl;
 
@@ -57,14 +68,6 @@ namespace millimq
             close(epfd_);
     }
 
-    static bool set_nonblocking(int fd)
-    {
-        int flags = fcntl(fd, F_GETFL, 0);
-        if (flags == -1)
-            return false;
-        return fcntl(fd, F_SETFL, flags | O_NONBLOCK) != -1;
-    }
-
     static bool try_send(int epfd, int fd, NetworkServer::Connection &conn)
     {
         while (!conn.send_buf.empty())
@@ -84,10 +87,6 @@ namespace millimq
             }
         }
         conn.send_pending = false;
-        struct epoll_event ev;
-        ev.events = EPOLLIN;
-        ev.data.fd = fd;
-        epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);
         return true;
     }
 
@@ -96,7 +95,6 @@ namespace millimq
                                       NetworkServer::Connection &conn,
                                       millimq::IndexManager &engine)
     {
-
         std::vector<char> frame_data;
         while (millimq::protocol::extract_frame(conn.recv_buf, frame_data))
         {
@@ -185,14 +183,7 @@ namespace millimq
 
         if (conn.send_pending)
         {
-            bool sent = try_send(epfd, fd, conn);
-            if (!sent && conn.send_buf.empty())
-            {
-                epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-                close(fd);
-                conns.erase(fd);
-                return;
-            }
+            try_send(epfd, fd, conn);
             if (conn.send_pending)
             {
                 struct epoll_event ev;
@@ -307,6 +298,13 @@ namespace millimq
                         if (conn.send_pending)
                         {
                             try_send(epfd_, fd, conn);
+                            if (!conn.send_pending)
+                            {
+                                struct epoll_event ev;
+                                ev.events = EPOLLIN;
+                                ev.data.fd = fd;
+                                epoll_ctl(epfd_, EPOLL_CTL_MOD, fd, &ev);
+                            }
                         }
                     }
 
